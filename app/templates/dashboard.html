@@ -1,0 +1,252 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - StarDiscover{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <!-- Welcome Section -->
+    <div class="bg-gray-800 rounded-lg p-6">
+        <h1 class="text-2xl font-bold text-white mb-2">Welcome, {{ user.username }}!</h1>
+        <p class="text-gray-400">Manage your recommendations and discover new repositories.</p>
+    </div>
+
+    <!-- Stats & Actions -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <!-- Sync Stars Card -->
+        <div class="bg-gray-800 rounded-lg p-6">
+            <h3 class="text-lg font-semibold text-white mb-4">Starred Repos</h3>
+            <div id="starred-count" class="text-3xl font-bold text-yellow-400 mb-4">--</div>
+            <button
+                id="sync-btn"
+                onclick="syncStars()"
+                class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+                Sync Stars
+            </button>
+            <div id="sync-status" class="mt-3 text-sm text-gray-400"></div>
+        </div>
+
+        <!-- Taste Profile Card -->
+        <div class="bg-gray-800 rounded-lg p-6">
+            <h3 class="text-lg font-semibold text-white mb-4">Taste Profile</h3>
+            <div id="profile-status" class="mb-4">
+                <span class="text-gray-400">Loading...</span>
+            </div>
+            <div id="profile-interests" class="space-y-2 mb-4 hidden">
+                <!-- Populated by JS -->
+            </div>
+        </div>
+
+        <!-- Recommendations Card -->
+        <div class="bg-gray-800 rounded-lg p-6">
+            <h3 class="text-lg font-semibold text-white mb-4">Recommendations</h3>
+            <div id="rec-count" class="text-3xl font-bold text-green-400 mb-4">--</div>
+            <button
+                id="generate-btn"
+                onclick="generateRecommendations()"
+                class="w-full bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+                Generate New
+            </button>
+            <div id="rec-status" class="mt-3 text-sm text-gray-400"></div>
+        </div>
+    </div>
+
+    <!-- Recent Recommendations Preview -->
+    <div class="bg-gray-800 rounded-lg p-6">
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="text-xl font-semibold text-white">Recent Recommendations</h2>
+            <a href="/recommendations" class="text-blue-400 hover:text-blue-300 text-sm">View All</a>
+        </div>
+        <div id="recent-recs" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div class="text-gray-400">Loading...</div>
+        </div>
+    </div>
+
+    <!-- Rate Limit Info -->
+    <div class="bg-gray-800 rounded-lg p-4">
+        <div class="flex items-center justify-between">
+            <span class="text-gray-400 text-sm">GitHub API Rate Limit:</span>
+            <span id="rate-limit" class="text-gray-300 text-sm">--/5000</span>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function fetchWithAuth(url, options = {}) {
+    const response = await fetch(url, {
+        ...options,
+        credentials: 'include'
+    });
+    return response;
+}
+
+async function loadDashboard() {
+    // Load starred count
+    try {
+        const starred = await fetchWithAuth('/api/github/starred?limit=1');
+        if (starred.ok) {
+            const data = await starred.json();
+            document.getElementById('starred-count').textContent =
+                data.length > 0 ? '...' : '0';
+        }
+    } catch (e) {
+        console.error('Failed to load starred:', e);
+    }
+
+    // Load profile
+    try {
+        const profile = await fetchWithAuth('/api/recommendations/profile');
+        if (profile.ok) {
+            const data = await profile.json();
+            if (data.profile) {
+                document.getElementById('profile-status').innerHTML =
+                    '<span class="text-green-400">Profile Ready</span>';
+                const interests = data.profile.primary_interests || [];
+                const container = document.getElementById('profile-interests');
+                container.innerHTML = interests.slice(0, 4).map(i =>
+                    `<span class="inline-block bg-gray-700 text-gray-300 text-xs px-2 py-1 rounded mr-1">${i}</span>`
+                ).join('');
+                container.classList.remove('hidden');
+            } else {
+                document.getElementById('profile-status').innerHTML =
+                    '<span class="text-yellow-400">Not generated yet</span>';
+            }
+        }
+    } catch (e) {
+        console.error('Failed to load profile:', e);
+    }
+
+    // Load recommendations
+    try {
+        const recs = await fetchWithAuth('/api/recommendations?limit=6');
+        if (recs.ok) {
+            const data = await recs.json();
+            document.getElementById('rec-count').textContent = data.length;
+
+            const container = document.getElementById('recent-recs');
+            if (data.length === 0) {
+                container.innerHTML = '<div class="text-gray-400 col-span-full">No recommendations yet. Sync your stars and generate!</div>';
+            } else {
+                container.innerHTML = data.slice(0, 3).map(rec => `
+                    <div class="bg-gray-700 rounded-lg p-4">
+                        <a href="https://github.com/${rec.full_name}" target="_blank" class="text-blue-400 hover:text-blue-300 font-medium">${rec.full_name}</a>
+                        <p class="text-gray-400 text-sm mt-1 line-clamp-2">${rec.description || 'No description'}</p>
+                        <div class="flex items-center mt-2 space-x-2">
+                            <span class="text-yellow-400 text-xs">${(rec.relevance_score * 100).toFixed(0)}% match</span>
+                            <span class="text-gray-500 text-xs">${rec.language || ''}</span>
+                        </div>
+                    </div>
+                `).join('');
+            }
+        }
+    } catch (e) {
+        console.error('Failed to load recommendations:', e);
+    }
+
+    // Load rate limit
+    try {
+        const limit = await fetchWithAuth('/api/github/rate-limit');
+        if (limit.ok) {
+            const data = await limit.json();
+            document.getElementById('rate-limit').textContent =
+                `${data.remaining || '--'}/${data.limit || '5000'}`;
+        }
+    } catch (e) {
+        console.error('Failed to load rate limit:', e);
+    }
+}
+
+async function syncStars() {
+    const btn = document.getElementById('sync-btn');
+    const status = document.getElementById('sync-status');
+
+    btn.disabled = true;
+    btn.textContent = 'Syncing...';
+    status.textContent = 'Starting sync...';
+
+    try {
+        const response = await fetchWithAuth('/api/github/sync-stars', { method: 'POST' });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Sync failed');
+        }
+
+        // Poll for status
+        const pollStatus = async () => {
+            const statusRes = await fetchWithAuth('/api/github/sync-status');
+            const data = await statusRes.json();
+
+            status.textContent = data.message || 'Processing...';
+
+            if (data.status === 'running') {
+                setTimeout(pollStatus, 2000);
+            } else if (data.status === 'completed') {
+                btn.disabled = false;
+                btn.textContent = 'Sync Stars';
+                loadDashboard();
+            } else if (data.status === 'failed') {
+                btn.disabled = false;
+                btn.textContent = 'Retry Sync';
+                status.textContent = 'Sync failed: ' + (data.message || 'Unknown error');
+            }
+        };
+
+        setTimeout(pollStatus, 1000);
+    } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Retry Sync';
+        status.textContent = 'Error: ' + e.message;
+    }
+}
+
+async function generateRecommendations() {
+    const btn = document.getElementById('generate-btn');
+    const status = document.getElementById('rec-status');
+
+    btn.disabled = true;
+    btn.textContent = 'Generating...';
+    status.textContent = 'Starting recommendation pipeline...';
+
+    try {
+        const response = await fetchWithAuth('/api/recommendations/generate', { method: 'POST' });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Generation failed');
+        }
+
+        // Poll for status
+        const pollStatus = async () => {
+            const statusRes = await fetchWithAuth('/api/recommendations/status');
+            const data = await statusRes.json();
+
+            status.textContent = `${data.progress || 0}% - ${data.message || 'Processing...'}`;
+
+            if (data.status === 'running') {
+                setTimeout(pollStatus, 3000);
+            } else if (data.status === 'completed') {
+                btn.disabled = false;
+                btn.textContent = 'Generate New';
+                loadDashboard();
+            } else if (data.status === 'failed') {
+                btn.disabled = false;
+                btn.textContent = 'Retry';
+                status.textContent = 'Failed: ' + (data.message || 'Unknown error');
+            }
+        };
+
+        setTimeout(pollStatus, 2000);
+    } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Retry';
+        status.textContent = 'Error: ' + e.message;
+    }
+}
+
+// Load dashboard on page load
+document.addEventListener('DOMContentLoaded', loadDashboard);
+</script>
+{% endblock %}

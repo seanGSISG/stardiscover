@@ -1,0 +1,284 @@
+{% extends "base.html" %}
+
+{% block title %}Recommendations - StarDiscover{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex justify-between items-center">
+        <div>
+            <h1 class="text-2xl font-bold text-white">Your Recommendations</h1>
+            <p class="text-gray-400 mt-1">Repositories we think you'll love based on your stars</p>
+        </div>
+        <button
+            id="refresh-btn"
+            onclick="generateNew()"
+            class="bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded transition-colors disabled:opacity-50"
+        >
+            Generate New Batch
+        </button>
+    </div>
+
+    <!-- Status Banner -->
+    <div id="status-banner" class="hidden bg-blue-900/50 border border-blue-700 rounded-lg p-4">
+        <div class="flex items-center space-x-3">
+            <svg class="animate-spin h-5 w-5 text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span id="status-text" class="text-blue-300">Generating recommendations...</span>
+        </div>
+        <div class="mt-2 bg-blue-950 rounded-full h-2">
+            <div id="progress-bar" class="bg-blue-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="bg-gray-800 rounded-lg p-4 flex items-center space-x-4">
+        <span class="text-gray-400 text-sm">Filter by language:</span>
+        <select id="language-filter" onchange="filterRecommendations()" class="bg-gray-700 text-white rounded px-3 py-1 text-sm border-none">
+            <option value="">All Languages</option>
+        </select>
+        <span class="text-gray-400 text-sm ml-4">Min match:</span>
+        <input
+            type="range"
+            id="score-filter"
+            min="40"
+            max="100"
+            value="40"
+            onchange="filterRecommendations()"
+            class="w-24"
+        >
+        <span id="score-value" class="text-gray-300 text-sm">40%</span>
+    </div>
+
+    <!-- Recommendations Grid -->
+    <div id="recommendations-grid" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="text-gray-400">Loading recommendations...</div>
+    </div>
+
+    <!-- Empty State -->
+    <div id="empty-state" class="hidden text-center py-12">
+        <svg class="w-16 h-16 text-gray-600 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+        </svg>
+        <h3 class="text-xl font-semibold text-gray-400 mb-2">No recommendations yet</h3>
+        <p class="text-gray-500 mb-4">Sync your starred repos and generate recommendations to get started.</p>
+        <a href="/" class="text-blue-400 hover:text-blue-300">Go to Dashboard</a>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allRecommendations = [];
+
+async function fetchWithAuth(url, options = {}) {
+    return await fetch(url, { ...options, credentials: 'include' });
+}
+
+async function loadRecommendations() {
+    const grid = document.getElementById('recommendations-grid');
+    const emptyState = document.getElementById('empty-state');
+
+    try {
+        const response = await fetchWithAuth('/api/recommendations?limit=50');
+        if (!response.ok) throw new Error('Failed to load');
+
+        allRecommendations = await response.json();
+
+        if (allRecommendations.length === 0) {
+            grid.classList.add('hidden');
+            emptyState.classList.remove('hidden');
+            return;
+        }
+
+        // Populate language filter
+        const languages = [...new Set(allRecommendations.map(r => r.language).filter(Boolean))];
+        const languageSelect = document.getElementById('language-filter');
+        languageSelect.innerHTML = '<option value="">All Languages</option>' +
+            languages.map(l => `<option value="${l}">${l}</option>`).join('');
+
+        emptyState.classList.add('hidden');
+        grid.classList.remove('hidden');
+        renderRecommendations(allRecommendations);
+
+    } catch (e) {
+        console.error('Failed to load recommendations:', e);
+        grid.innerHTML = '<div class="text-red-400 col-span-full">Failed to load recommendations</div>';
+    }
+}
+
+function filterRecommendations() {
+    const language = document.getElementById('language-filter').value;
+    const minScore = parseInt(document.getElementById('score-filter').value) / 100;
+    document.getElementById('score-value').textContent = `${Math.round(minScore * 100)}%`;
+
+    let filtered = allRecommendations.filter(r => r.relevance_score >= minScore);
+    if (language) {
+        filtered = filtered.filter(r => r.language === language);
+    }
+
+    renderRecommendations(filtered);
+}
+
+function renderRecommendations(recommendations) {
+    const grid = document.getElementById('recommendations-grid');
+
+    if (recommendations.length === 0) {
+        grid.innerHTML = '<div class="text-gray-400 col-span-full">No recommendations match your filters.</div>';
+        return;
+    }
+
+    grid.innerHTML = recommendations.map(rec => `
+        <div class="bg-gray-800 rounded-lg p-6 border border-gray-700 hover:border-gray-600 transition-colors">
+            <div class="flex justify-between items-start mb-3">
+                <a href="https://github.com/${rec.full_name}" target="_blank" class="text-lg font-semibold text-blue-400 hover:text-blue-300">
+                    ${rec.full_name}
+                </a>
+                <div class="flex items-center space-x-2">
+                    <span class="bg-green-900/50 text-green-400 text-xs px-2 py-1 rounded">
+                        ${(rec.relevance_score * 100).toFixed(0)}% match
+                    </span>
+                </div>
+            </div>
+
+            <p class="text-gray-400 text-sm mb-4">${rec.description || 'No description available'}</p>
+
+            <div class="flex flex-wrap gap-2 mb-4">
+                ${rec.language ? `<span class="bg-gray-700 text-gray-300 text-xs px-2 py-1 rounded">${rec.language}</span>` : ''}
+                ${(rec.topics || []).slice(0, 3).map(t => `<span class="bg-gray-700 text-gray-300 text-xs px-2 py-1 rounded">${t}</span>`).join('')}
+            </div>
+
+            <div class="bg-gray-900/50 rounded p-3 mb-4">
+                <p class="text-gray-300 text-sm italic">"${rec.explanation}"</p>
+            </div>
+
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-4 text-gray-500 text-sm">
+                    <span title="Stars">
+                        <svg class="w-4 h-4 inline text-yellow-500" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+                        </svg>
+                        ${formatNumber(rec.stars_count || 0)}
+                    </span>
+                </div>
+
+                <div class="flex items-center space-x-2">
+                    <button
+                        onclick="submitFeedback(${rec.id}, 'thumbs_up')"
+                        class="p-2 rounded hover:bg-gray-700 transition-colors ${rec.feedback === 'thumbs_up' ? 'bg-green-900/50 text-green-400' : 'text-gray-400'}"
+                        title="I like this"
+                    >
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 10h4.764a2 2 0 011.789 2.894l-3.5 7A2 2 0 0115.263 21h-4.017c-.163 0-.326-.02-.485-.06L7 20m7-10V5a2 2 0 00-2-2h-.095c-.5 0-.905.405-.905.905 0 .714-.211 1.412-.608 2.006L7 11v9m7-10h-2M7 20H5a2 2 0 01-2-2v-6a2 2 0 012-2h2.5"/>
+                        </svg>
+                    </button>
+                    <button
+                        onclick="submitFeedback(${rec.id}, 'thumbs_down')"
+                        class="p-2 rounded hover:bg-gray-700 transition-colors ${rec.feedback === 'thumbs_down' ? 'bg-red-900/50 text-red-400' : 'text-gray-400'}"
+                        title="Not for me"
+                    >
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14H5.236a2 2 0 01-1.789-2.894l3.5-7A2 2 0 018.736 3h4.018a2 2 0 01.485.06l3.76.94m-7 10v5a2 2 0 002 2h.096c.5 0 .905-.405.905-.904 0-.715.211-1.413.608-2.008L17 13V4m-7 10h2m5-10h2a2 2 0 012 2v6a2 2 0 01-2 2h-2.5"/>
+                        </svg>
+                    </button>
+                    <button
+                        onclick="submitFeedback(${rec.id}, 'dismiss')"
+                        class="p-2 rounded hover:bg-gray-700 transition-colors ${rec.feedback === 'dismiss' ? 'bg-gray-600' : 'text-gray-400'}"
+                        title="Dismiss"
+                    >
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+function formatNumber(num) {
+    if (num >= 1000) {
+        return (num / 1000).toFixed(1) + 'k';
+    }
+    return num.toString();
+}
+
+async function submitFeedback(recId, feedbackType) {
+    try {
+        const response = await fetchWithAuth(`/api/recommendations/${recId}/feedback?feedback_type=${feedbackType}`, {
+            method: 'POST'
+        });
+
+        if (response.ok) {
+            // Update local state and re-render
+            const rec = allRecommendations.find(r => r.id === recId);
+            if (rec) {
+                rec.feedback = feedbackType;
+                filterRecommendations();
+            }
+        }
+    } catch (e) {
+        console.error('Failed to submit feedback:', e);
+    }
+}
+
+async function generateNew() {
+    const btn = document.getElementById('refresh-btn');
+    const banner = document.getElementById('status-banner');
+    const statusText = document.getElementById('status-text');
+    const progressBar = document.getElementById('progress-bar');
+
+    btn.disabled = true;
+    banner.classList.remove('hidden');
+
+    try {
+        const response = await fetchWithAuth('/api/recommendations/generate', { method: 'POST' });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Generation failed');
+        }
+
+        // Poll for status
+        const pollStatus = async () => {
+            const statusRes = await fetchWithAuth('/api/recommendations/status');
+            const data = await statusRes.json();
+
+            statusText.textContent = data.message || 'Processing...';
+            progressBar.style.width = `${data.progress || 0}%`;
+
+            if (data.status === 'running') {
+                setTimeout(pollStatus, 2000);
+            } else if (data.status === 'completed') {
+                btn.disabled = false;
+                banner.classList.add('hidden');
+                loadRecommendations();
+            } else if (data.status === 'failed') {
+                btn.disabled = false;
+                statusText.textContent = 'Failed: ' + (data.message || 'Unknown error');
+                statusText.classList.add('text-red-400');
+                setTimeout(() => {
+                    banner.classList.add('hidden');
+                    statusText.classList.remove('text-red-400');
+                }, 5000);
+            }
+        };
+
+        setTimeout(pollStatus, 2000);
+    } catch (e) {
+        btn.disabled = false;
+        statusText.textContent = 'Error: ' + e.message;
+        statusText.classList.add('text-red-400');
+        setTimeout(() => {
+            banner.classList.add('hidden');
+            statusText.classList.remove('text-red-400');
+        }, 5000);
+    }
+}
+
+// Load on page load
+document.addEventListener('DOMContentLoaded', loadRecommendations);
+</script>
+{% endblock %}

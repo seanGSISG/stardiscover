@@ -1,0 +1,32 @@
+services:
+  stardiscover:
+    build: .
+    container_name: stardiscover
+    restart: unless-stopped
+    ports:
+      - "8085:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./app/templates:/app/app/templates:ro
+      - ./app/static:/app/app/static:ro
+    depends_on:
+      - redis
+    networks:
+      - stardiscover
+
+  redis:
+    image: redis:7-alpine
+    container_name: stardiscover-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - stardiscover
+
+networks:
+  stardiscover:
+
+volumes:
+  redis_data:
